@@ -67,7 +67,7 @@ class MatcherParameters:
             self.layer_patch_num = [6, 6, 6]  # patch numbers per image level
             self.layer_patch_max_num = [20, 50, 50]  # maximum try at each image level
             self.layer_patch_size = [2000, 800, 500]  # patch size at each image level for registration
-        else:
+        else: 
             self.rescale_rate = rescale_rate  # rescale to get the thumbnail
             self.layer_patch_num = layer_patch_num   # patch numbers per image level
             self.layer_patch_max_num = layer_patch_max_try  # maximum try at each image level
@@ -198,7 +198,6 @@ class WSI_Matcher:
 
     def match_sample_patches(self, fixed_wsi_obj, float_wsi_obj, indices_dic, layer_patch_num, layer_patch_size, layer_rescale_factors):
         patches_match_offset_dic = {}
-        print(layer_patch_size)
         for l in range(len(layer_patch_size)):
             [fixed_loc_x, fixed_loc_y], [float_loc_x, float_loc_y] = indices_dic.get("level_" + str(l + 1))
             layer_match_offset = []
