@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 import torch.nn
 from torchvision import transforms
 from torchvision.models import ResNet50_Weights, resnet50
+from sklearn.utils import resample
 
 #SETUP SEED FOR TRAINING REPLICATION
 setup_seed(0)
@@ -97,8 +98,7 @@ for fold in range(outer_folds):
     test_data = ImageDataset(test_data, transform=
                                        transforms.Compose([transforms.ToPILImage(), 
                                                            transforms.ToTensor(), 
-                                                           transforms.Resize(224),
-                                                           transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]))
+                                                           transforms.Resize(224)]))
     test_loader = DataLoader(test_data, batch_size=batch_size, num_workers = num_workers)
     
     inner_models = []
@@ -114,33 +114,40 @@ for fold in range(outer_folds):
 
         validation_data = data_all[data_all['FILENAME'].str.startswith(
             f'/gpfs/data/razavianlab/data/hist/nyu/IHC_tiles/{validation_case}/')].reset_index(drop=True)
-
-
+        
+        df_majority = train_data[train_data['LABEL']==0]
+        df_minority = train_data[train_data['LABEL']==1]
+        
+        train_data_upsampled = resample(df_minority, 
+                                 replace=True,     
+                                 n_samples=(int(df_majority.shape[0]/2)))
+        
+        train_data = pd.concat([df_majority, train_data_upsampled]).reset_index(drop=True)
+        print(train_data.LABEL.value_counts())
+        
+        #labels_unique, counts = np.unique(train_data['LABEL'], return_counts=True)
+        #print('Unique labels : {}'.format(labels_unique))
+        #class_weights = [sum(counts) / c for c in counts]
+        #example_weights = [class_weights[e] for e in train_data['LABEL']]
+        #sampler = WeightedRandomSampler(example_weights, len(train_data['LABEL']))
+        
         # Print the number of samples in each set for verification (optional)
         print("Train samples:", len(train_data))
         print("Validation samples:", len(validation_data))
-        
-        labels_unique, counts = np.unique(train_data['LABEL'], return_counts=True)
-        print('Unique labels : {}'.format(labels_unique))
-        class_weights = [sum(counts) / c for c in counts]
-        example_weights = [class_weights[e] for e in train_data['LABEL']]
-        sampler = WeightedRandomSampler(example_weights, len(train_data['LABEL']))
 
         ## Create train DataLoader
         training_data = ImageDataset(train_data, transform=transforms.Compose(([transforms.ToPILImage(),
                                                                                 transforms.ToTensor(),
                                                                                 transforms.Resize(224),
-                                                                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                                                                 transforms.RandomRotation(15),
                                                                                 transforms.RandomHorizontalFlip()])))
-        train_loader = DataLoader(training_data, sampler = sampler, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+        train_loader = DataLoader(training_data, sampler = None, batch_size=batch_size, shuffle=False, num_workers = num_workers)
 
         ## Create validation Dataloader
         validation_data = ImageDataset(validation_data, transform=
                                        transforms.Compose([transforms.ToPILImage(), 
                                                            transforms.ToTensor(), 
-                                                           transforms.Resize(224),
-                                                           transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]))
+                                                           transforms.Resize(224)]))
         valid_loader = DataLoader(validation_data, batch_size=batch_size, num_workers = num_workers)
         
         
@@ -238,9 +245,9 @@ for fold in range(outer_folds):
         loss_df = pd.DataFrame.from_dict(loss_dict, orient='index')
         acc_df = pd.DataFrame.from_dict(acc_dict, orient='index')
         auc_df = pd.DataFrame.from_dict(auc_dict, orient='index')
-        loss_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_train&valid_loss_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}.csv', index=False)
-        acc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_train&valid_acc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}.csv', index=False)
-        auc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_train&valid_auc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}.csv', index=False)
+        loss_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_train&valid_loss_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
+        acc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_train&valid_acc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
+        auc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_train&valid_auc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
 
         #PLOTTING LOSS AND ACCURACY
         fig, axs = plt.subplots(1,3,figsize=(16,8))
@@ -256,7 +263,7 @@ for fold in range(outer_folds):
         axs[0].legend(loc='center left')
         axs[1].legend(loc='center left')
         axs[2].legend(loc='center left')
-        plt.savefig(f"/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_TRAIN_METRICS_NCV_outerloop{fold}_innerfold{inner_fold}")
+        plt.savefig(f"/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_TRAIN_METRICS_NCV_outerloop{fold}_innerfold{inner_fold}upsample")
         plt.close()
         
         #SAVE VERSION OF INNER TRAINED MODEL
@@ -303,7 +310,7 @@ for fold in range(outer_folds):
     test_auc = roc_auc_score(test_targets, test_proba)
     test_results = {'loss': test_loss, 'accuracy': test_accuracy, 'auc': test_auc}
     test_results = pd.DataFrame.from_dict(test_results, orient='index')
-    test_results.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_testresults_outerloop{fold}.csv', index=True)
+    test_results.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_testresults_outerloop{fold}upsample.csv', index=True)
                                 
     fpr, tpr, _ = roc_curve(test_targets, test_proba)
     outer_fold_auc_scores.append(test_auc)
@@ -313,7 +320,7 @@ for fold in range(outer_folds):
     plt.xlabel('False Positive Rate')
     plt.plot([0,1],[0,1],"k--")
     plt.legend(loc=4)
-    plt.savefig(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_ROC_CURVE_outerloop_{fold}.png')
+    plt.savefig(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_ROC_CURVE_outerloop_{fold}upsample.png')
     plt.show()
 
     #CLASSIFICATION REPORT CREATE AND SAVE
@@ -352,7 +359,7 @@ for fold in range(outer_folds):
         plt.tight_layout()
         plt.ylabel('True label')
         plt.xlabel('Predicted label')
-        plt.savefig(f"/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_CONFUSION_MATRIX_outerloop{fold}.png")
+        plt.savefig(f"/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_CONFUSION_MATRIX_outerloop{fold}upsample.png")
         plt.show()
         plt.close()
 
@@ -369,7 +376,7 @@ for fold in range(outer_folds):
     classificationreport = classification_report(test_targets, test_predictions, target_names = class_names, output_dict=True)
     print(classificationreport)
     df = pd.DataFrame(classificationreport).transpose()
-    df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_classification_report_outerloop{fold}.csv', index=True)
+    df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet_classification_report_outerloop{fold}upsample.csv', index=True)
     print(f"Test Accuracy: {test_accuracy:.4f}\n")
     
     outer_models.append((model.state_dict(), test_auc))
@@ -385,8 +392,8 @@ print(f"Average Accuracy: {average_accuracy}", f"Average AUC: {average_auc_score
 best_model = max(outer_models, key=lambda x: x[1])  # Select the model with the highest testing AUC
 model_state, best_test_metrics = best_model
 best_auc = best_test_metrics
-torch.save(model_state, '/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_Models/best_egfr_resnet50.pt')
-print(f'Complete, congratulations! The best model AUC is {best_auc}. Best model saved as best_egfr_resnet50.pt')
+torch.save(model_state, '/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_Models/best_egfr_resnet50upsample.pt')
+print(f'Complete, congratulations! The best model AUC is {best_auc}. Best model saved as best_egfr_resnet50upsample.pt')
 
 
 
