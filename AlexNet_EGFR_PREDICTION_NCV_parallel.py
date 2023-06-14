@@ -11,13 +11,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as f
-from resnet_utils import *
+from alexnet_utils import *
 from sklearn.metrics import (accuracy_score, classification_report,
                              roc_auc_score, roc_curve)
 from torch.utils.data import DataLoader, WeightedRandomSampler
 import torch.nn
 from torchvision import transforms
-from torchvision.models import ResNet50_Weights, resnet50
 from sklearn.utils import resample
 
 #SETUP SEED FOR TRAINING REPLICATION
@@ -70,7 +69,7 @@ image_cases = set(np.unique([x.split('/')[-3] for x in data_all['FILENAME']]))
 #$ Define hyperparameters
 lr = 3e-5
 weight_decay = 0.001
-batch_size = 256
+batch_size = 64
 num_epochs = 6
 
 # Perform nested cross-validation
@@ -93,7 +92,7 @@ for fold in range(outer_folds):
     test_data = data_all[data_all['FILENAME'].str.startswith(f'/gpfs/data/razavianlab/data/hist/nyu/IHC_tiles/{test_case}/')].reset_index(drop=True)
     
     print("Test samples:", len(test_data))
-    
+    print("Test Labels:", test_data.LABEL.value_counts())
     ## Create test DataLoader
     test_data = ImageDataset(test_data, transform=
                                        transforms.Compose([transforms.ToPILImage(), 
@@ -123,7 +122,6 @@ for fold in range(outer_folds):
                                  n_samples=(int(df_majority.shape[0]/4)))
         
         train_data = pd.concat([df_majority, train_data_upsampled]).reset_index(drop=True)
-        print(train_data.LABEL.value_counts())
         
         #labels_unique, counts = np.unique(train_data['LABEL'], return_counts=True)
         #print('Unique labels : {}'.format(labels_unique))
@@ -133,14 +131,18 @@ for fold in range(outer_folds):
         
         # Print the number of samples in each set for verification (optional)
         print("Train samples:", len(train_data))
+        print("Train Labels:", train_data.LABEL.value_counts())
+        
         print("Validation samples:", len(validation_data))
+        print("Validation Labels:", validation_data.LABEL.value_counts())
 
         ## Create train DataLoader
         training_data = ImageDataset(train_data, transform=transforms.Compose(([transforms.ToPILImage(),
                                                                                 transforms.ToTensor(),
                                                                                 transforms.Resize(224),
                                                                                 transforms.RandomRotation(15),
-                                                                                transforms.RandomHorizontalFlip()])))
+                                                                                transforms.RandomHorizontalFlip(),
+                                                                                transforms.RandomVerticalFlip()])))
         train_loader = DataLoader(training_data, sampler = None, batch_size=batch_size, shuffle=True, num_workers = num_workers)
 
         ## Create validation Dataloader
@@ -152,10 +154,10 @@ for fold in range(outer_folds):
         
         
         #LOAD AND INITIALIZE MODEL
-        model = resnet50()
-        num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, 2)
+        model = torch.hub.load('pytorch/vision:v0.10.0', 'alexnet', pretrained=True)
+        model.classifier[6] = nn.Linear(4096,2)
         model = nn.DataParallel(model)
+        model.to(device)
         model.to(device)
         
         ## Define the optimizer and loss function
@@ -245,9 +247,9 @@ for fold in range(outer_folds):
         loss_df = pd.DataFrame.from_dict(loss_dict, orient='index')
         acc_df = pd.DataFrame.from_dict(acc_dict, orient='index')
         auc_df = pd.DataFrame.from_dict(auc_dict, orient='index')
-        loss_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_train&valid_loss_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
-        acc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_train&valid_acc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
-        auc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_train&valid_auc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
+        loss_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_train&valid_loss_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
+        acc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_train&valid_acc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
+        auc_df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_train&valid_auc_df_NCV_parallel_outerloop{fold}_innerfold{inner_fold}upsample.csv', index=False)
 
         #PLOTTING LOSS AND ACCURACY
         fig, axs = plt.subplots(1,3,figsize=(16,8))
@@ -263,7 +265,7 @@ for fold in range(outer_folds):
         axs[0].legend(loc='center left')
         axs[1].legend(loc='center left')
         axs[2].legend(loc='center left')
-        plt.savefig(f"/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_TRAIN_METRICS_NCV_outerloop{fold}_innerfold{inner_fold}upsample")
+        plt.savefig(f"/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_TRAIN_METRICS_NCV_outerloop{fold}_innerfold{inner_fold}upsample")
         plt.close()
         
         #SAVE VERSION OF INNER TRAINED MODEL
@@ -276,9 +278,8 @@ for fold in range(outer_folds):
     model_state, best_val_metrics = best_inner_model
     
     #LOAD AND INITIALIZE MODEL
-    model = resnet50()
-    num_ftrs = model.fc.in_features
-    model.fc = nn.Linear(num_ftrs, 2)
+    model = torch.hub.load('pytorch/vision:v0.10.0', 'alexnet', pretrained=True)
+    model.classifier[6] = nn.Linear(4096,2)
     model = nn.DataParallel(model)
     model.to(device)
     model.load_state_dict(model_state)
@@ -299,7 +300,7 @@ for fold in range(outer_folds):
                 output = output.logits
             loss = criterion(output, label)
             p = f.softmax(output, dim=1)
-            test_proba.extend(p[:,1].cpu().detach().cpu().numpy())
+            test_proba.extend(p[:,1].cpu().detach().numpy())
             _, predicted_labels = torch.max(output, 1)
             test_predictions.extend(predicted_labels.cpu().tolist())
             test_targets.extend(label.cpu().tolist())
@@ -310,7 +311,7 @@ for fold in range(outer_folds):
     test_auc = roc_auc_score(test_targets, test_proba)
     test_results = {'loss': test_loss, 'accuracy': test_accuracy, 'auc': test_auc}
     test_results = pd.DataFrame.from_dict(test_results, orient='index')
-    test_results.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_testresults_outerloop{fold}upsample.csv', index=True)
+    test_results.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_testresults_outerloop{fold}upsample.csv', index=True)
                                 
     fpr, tpr, _ = roc_curve(test_targets, test_proba)
     outer_fold_auc_scores.append(test_auc)
@@ -320,26 +321,23 @@ for fold in range(outer_folds):
     plt.xlabel('False Positive Rate')
     plt.plot([0,1],[0,1],"k--")
     plt.legend(loc=4)
-    plt.savefig(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_ROC_CURVE_outerloop_{fold}upsample.png')
+    plt.savefig(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_ROC_CURVE_outerloop_{fold}upsample.png')
     plt.show()
 
     #CLASSIFICATION REPORT CREATE AND SAVE
     class_names = ['0: Negative for Mutation','1: Positive for Mutation']
+    
     classificationreport = classification_report(test_targets, test_predictions, target_names = class_names, output_dict=True)
     print(classificationreport)
     df = pd.DataFrame(classificationreport).transpose()
-    df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_classification_report_outerloop{fold}upsample.csv', index=True)
+    df.to_csv(f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_classification_report_outerloop{fold}upsample.csv', index=True)
     
     #CREATE AND SAVE CONFUSION MATRIX
-    filename = f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_confusion_mat_outerloop_{fold}upsample.png'
+    filename = f'/gpfs/scratch/jdl624/EGFR_Mutation_Results/AlexNet/AlexNet_confusion_mat_outerloop_{fold}upsample.png'
 
     plot_confusion_matrix(test_predictions, test_targets, filename = filename, classes=class_names)
     
-
-    print(f"Test Accuracy: {test_accuracy:.4f}\n")
-    
     outer_models.append((model.state_dict(), test_auc))
-
 
 # Print the average accuracy across outer folds
 average_accuracy = sum(outer_fold_accuracies) / len(outer_fold_accuracies)
@@ -351,9 +349,7 @@ print(f"Average Accuracy: {average_accuracy}", f"Average AUC: {average_auc_score
 best_model = max(outer_models, key=lambda x: x[1])  # Select the model with the highest testing AUC
 model_state, best_test_metrics = best_model
 best_auc = best_test_metrics
-torch.save(model_state, '/gpfs/scratch/jdl624/EGFR_Mutation_Results/ResNet/ResNet50_Models/best_egfr_resnet50upsample.pt')
-print(f'Complete, congratulations! The best model AUC is {best_auc}. Best model saved as best_egfr_resnet50upsample.pt')
-
-
+torch.save(model_state, '/gpfs/home/jdl624/EGFR_TUMOR_TRAIN/AlexNet/AlexNet_Modelsbest_egfr_alexnetupsample.pt')
+print(f'Complete, congratulations! The best model AUC is {best_auc}. Best model saved as best_egfr_alexnetupsample.pt')
 
 

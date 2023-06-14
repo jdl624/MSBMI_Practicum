@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 import torch.nn as nn
 from torchvision import transforms
 from transformers import ViTFeatureExtractor, ViTForImageClassification
+from sklearn.utils import resample
 
 #SETUP SEED FOR TRAINING REPLICATION
 setup_seed(0)
@@ -99,8 +100,7 @@ for fold in range(outer_folds):
     test_data = ImageDataset(test_data, transform=
                                        transforms.Compose([transforms.ToPILImage(),
                                                            transforms.ToTensor(),
-                                                           transforms.Resize(224),
-                                                           transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]))
+                                                           transforms.Resize(224)]))
     test_loader = DataLoader(test_data, collate_fn=collator, batch_size=batch_size, num_workers = num_workers)
     
     inner_models = []
@@ -116,38 +116,46 @@ for fold in range(outer_folds):
 
         validation_data = data_all[data_all['FILENAME'].str.startswith(
             f'/gpfs/data/razavianlab/data/hist/nyu/IHC_tiles/{validation_case}/')].reset_index(drop=True)
-
+        
+        df_majority = train_data[train_data['LABEL']==0]
+        df_minority = train_data[train_data['LABEL']==1]
+        
+        train_data_upsampled = resample(df_minority, 
+                                 replace=True,     
+                                 n_samples=(int(df_majority.shape[0]/4)))
+        
+        train_data = pd.concat([df_majority, train_data_upsampled]).reset_index(drop=True)
+        print(train_data.LABEL.value_counts())
 
         # Print the number of samples in each set for verification (optional)
         print("Train samples:", len(train_data))
         print("Validation samples:", len(validation_data))
         
-        labels_unique, counts = np.unique(train_data['LABEL'], return_counts=True)
-        print('Unique labels : {}'.format(labels_unique))
-        class_weights = [sum(counts) / c for c in counts]
-        example_weights = [class_weights[e] for e in train_data['LABEL']]
-        sampler = WeightedRandomSampler(example_weights, len(train_data['LABEL']))
+        #labels_unique, counts = np.unique(train_data['LABEL'], return_counts=True)
+        #print('Unique labels : {}'.format(labels_unique))
+        #class_weights = [sum(counts) / c for c in counts]
+        #example_weights = [class_weights[e] for e in train_data['LABEL']]
+        #sampler = WeightedRandomSampler(example_weights, len(train_data['LABEL']))
 
         ## Create train DataLoader
-        training_data = ImageDataset(train_data, transform=transforms.Compose([transforms.ToPILImage(),
-                                                                               transforms.ToTensor(),
-                                                                               transforms.Resize(224), 
-                                                                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), 
-                                                                               transforms.RandomRotation(15),
-                                                                               transforms.RandomHorizontalFlip()]))
-        train_loader = DataLoader(training_data, sampler = sampler, collate_fn=collator, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+        training_data = ImageDataset(train_data, transform=transforms.Compose(([transforms.ToPILImage(),
+                                                                                transforms.ToTensor(),
+                                                                                transforms.Resize(224),
+                                                                                transforms.RandomRotation(15),
+                                                                                transforms.RandomHorizontalFlip()])))
+        train_loader = DataLoader(training_data, sampler = None, collate_fn=collator, batch_size=batch_size, shuffle=True, num_workers = num_workers)
 
         ## Create validation Dataloader
         validation_data = ImageDataset(validation_data, transform=
                                        transforms.Compose([transforms.ToPILImage(),
                                                            transforms.ToTensor(),
-                                                           transforms.Resize(224),
-                                                           transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]))
+                                                           transforms.Resize(224)]))
         valid_loader = DataLoader(validation_data, collate_fn=collator, batch_size=batch_size, num_workers = num_workers)
 
 
         #LOAD AND INITIALIZE MODEL
-        model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+        model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224',
+                                                  num_labels=2, ignore_mismatched_sizes=True)
         model = nn.DataParallel(model)
         model.to(device)
 
@@ -173,7 +181,7 @@ for fold in range(outer_folds):
                 image = data['pixel_values'].to(device)
                 label = data['labels'].to(device)
 
-                output = model(image.float())
+                output = model(image)
                 if hasattr(output, 'logits'):
                     output = output.logits
                 loss = criterion(output, label)
@@ -271,7 +279,8 @@ for fold in range(outer_folds):
     best_inner_model = max(inner_models, key=lambda x: x[1])  # Select the model with the highest validation AUC
     model_state, best_val_metrics = best_inner_model
     
-    model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+    model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224',
+                                                      num_labels=2, ignore_mismatched_sizes=True)
     model = nn.DataParallel(model)
     model.to(device)
     model.load_state_dict(model_state)
@@ -287,7 +296,7 @@ for fold in range(outer_folds):
             image = data['pixel_values'].to(device)
             label = data['labels'].to(device)
 
-            output = model(image.float())
+            output = model(image)
             if hasattr(output, 'logits'):
                 output = output.logits
             loss = criterion(output, label)
